@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     max_csv_size_mb: int = Field(default=10, ge=1, le=100)
     max_rows: int = Field(default=50000, ge=1, le=500000)
     request_timeout_seconds: int = Field(default=20, ge=5, le=120)
+    csv_store_dir: str = "data/csv_store"
     openai_api_key: str | None = None
     openai_model: str = "gpt-4.1-mini"
 

@@ -44,7 +44,7 @@ data/
   csv_store/
 ```
 
-## Run
+## Run (Local)
 
 ```bash
 python -m venv .venv
@@ -121,3 +121,26 @@ SSE events emitted:
 - For SSE, disable proxy buffering (`X-Accel-Buffering: no`) and increase upstream timeouts.
 - Add distributed rate limiting and request quotas for public APIs.
 - Respect robots.txt and site ToS for scraping.
+
+## Railway Deployment
+
+### Required Environment Variables
+- `OPENAI_API_KEY`
+- `OPENAI_MODEL` (default: `gpt-4.1-mini`)
+- `CSV_STORE_DIR` (default: `data/csv_store`)
+
+Use `.env.example` as a template for all supported settings.
+
+### Build and Start
+- Build command (install Playwright browsers):
+  - `python -m playwright install --with-deps`
+- Start command:
+  - `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+
+### Storage
+CSV uploads are stored on disk. Railway storage is ephemeral unless you attach a volume. If you need CSVs to survive deploys or restarts, add a Railway volume and set `CSV_STORE_DIR` to the mounted path. If you only need short-lived storage (up to 10 files), ephemeral storage is acceptable.
+
+### Packaging
+This project uses `pyproject.toml` as the source of truth for dependencies. Prefer installing with:
+- `pip install .` (prod)
+- `pip install -e '.[dev]'` (dev)

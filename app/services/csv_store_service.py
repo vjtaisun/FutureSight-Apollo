@@ -4,11 +4,15 @@ from pathlib import Path
 from uuid import uuid4
 
 from app.core.exceptions import AppError
+from app.core.settings import get_settings
 
 
 class CsvStoreService:
     def __init__(self, base_dir: Path | None = None, max_items: int = 10) -> None:
-        self.base_dir = base_dir or Path("/Users/nishameena/Desktop/FutureFirstAI-Apollo/data/csv_store")
+        if base_dir is None:
+            settings = get_settings()
+            base_dir = Path(settings.csv_store_dir)
+        self.base_dir = base_dir
         self.base_dir.mkdir(parents=True, exist_ok=True)
         self.index_path = self.base_dir / "index.json"
         self.max_items = max_items
