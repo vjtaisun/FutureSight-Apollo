@@ -1,14 +1,9 @@
 import json
 from collections.abc import AsyncGenerator
 
-import pandas as pd
-
 from app.core.exceptions import AppError
-from app.prompts.chat_csv_context_prompt import get_csv_context_prompt
 from app.prompts.system_prompt import get_system_prompt
 from app.schemas.chat import ChatStreamRequest
-from app.services.csv_service import load_reviews_dataframe
-from app.services.csv_store_service import CsvStoreService, get_csv_store_service
 from app.services.openai_client import OpenAIClient, get_openai_client
 
 
@@ -16,29 +11,15 @@ class ChatService:
     def __init__(
         self,
         client: OpenAIClient | None = None,
-        store_service: CsvStoreService | None = None,
     ) -> None:
         self.client = client or get_openai_client()
-        self.store_service = store_service or get_csv_store_service()
         self.default_model = self.client.default_model
 
     @staticmethod
     def _sse(event: str, data: dict[str, object]) -> str:
         return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
-    @staticmethod
-    def _build_csv_context(df: pd.DataFrame, sample_size: int = 200) -> str:
-        sampled = df.head(sample_size)
-        payload = {
-            "columns": df.columns.tolist(),
-            "row_count": int(len(df)),
-            "column_count": int(len(df.columns)),
-            "sampled_rows": int(len(sampled)),
-            "rows": sampled.to_dict(orient="records"),
-        }
-        return json.dumps(payload, ensure_ascii=True)
-
-    def _to_responses_input(self, message: str, csv_context: str | None) -> list[dict[str, object]]:
+    def _to_responses_input(self, message: str) -> list[dict[str, object]]:
         system_prompt = get_system_prompt()
         items: list[dict[str, object]] = [
             {
@@ -46,18 +27,6 @@ class ChatService:
                 "content": [{"type": "input_text", "text": system_prompt}],
             }
         ]
-
-        if csv_context:
-            csv_prompt = get_csv_context_prompt()
-            items.append(
-                {
-                    "role": "system",
-                    "content": [
-                        {"type": "input_text", "text": csv_prompt},
-                        {"type": "input_text", "text": csv_context},
-                    ],
-                }
-            )
 
         items.append(
             {
@@ -70,19 +39,17 @@ class ChatService:
     async def stream_chat(self, payload: ChatStreamRequest) -> AsyncGenerator[str, None]:
         model = payload.model or self.default_model
 
-        csv_context: str | None = None
-        if payload.csv_id:
-            raw = self.store_service.get_csv(payload.csv_id)
-            df = load_reviews_dataframe(raw)
-            csv_context = self._build_csv_context(df)
-
         request_args: dict[str, object] = {
             "model": model,
-            "input": self._to_responses_input(payload.message, csv_context),
+            "input": self._to_responses_input(payload.message),
             "temperature": payload.temperature,
             "max_output_tokens": payload.max_output_tokens,
             "stream": True,
         }
+        if payload.csv_id:
+            request_args["tools"] = [
+                {"type": "file_search", "vector_store_ids": [payload.csv_id]}
+            ]
         if payload.previous_response_id:
             request_args["previous_response_id"] = payload.previous_response_id
 

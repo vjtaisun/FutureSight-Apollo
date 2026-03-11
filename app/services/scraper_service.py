@@ -1,3 +1,4 @@
+import json
 from typing import Any
 
 import httpx
@@ -12,11 +13,46 @@ REVIEW_LIKE_SELECTORS = [
     '.review-text',
     '.review',
     '.comment',
+    '.review-body',
+    '.review__body',
+    '.review-content',
+    '.reviewText',
+    '[data-hook="review-body"]',
+    '[data-hook="review-collapsed"]',
 ]
+
+
+def _extract_jsonld_reviews(soup: BeautifulSoup) -> list[str]:
+    extracted: list[str] = []
+    scripts = soup.find_all("script", attrs={"type": "application/ld+json"})
+    for script in scripts:
+        try:
+            payload = json.loads(script.string or "")
+        except Exception:
+            continue
+
+        nodes = payload if isinstance(payload, list) else [payload]
+        for node in nodes:
+            graph = node.get("@graph") if isinstance(node, dict) else None
+            for item in (graph or [node]):
+                if not isinstance(item, dict):
+                    continue
+                reviews = item.get("review") or item.get("reviews") or []
+                if isinstance(reviews, dict):
+                    reviews = [reviews]
+                for review in reviews:
+                    if not isinstance(review, dict):
+                        continue
+                    body = review.get("reviewBody")
+                    if isinstance(body, str) and len(body) >= 20:
+                        extracted.append(body.strip())
+    return extracted
 
 
 def _extract_text_candidates(soup: BeautifulSoup) -> list[str]:
     extracted: list[str] = []
+
+    extracted.extend(_extract_jsonld_reviews(soup))
 
     for selector in REVIEW_LIKE_SELECTORS:
         nodes = soup.select(selector)

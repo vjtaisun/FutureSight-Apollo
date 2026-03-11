@@ -1,58 +1,26 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 
-class CsvSummaryStats(BaseModel):
+class WordFrequency(BaseModel):
+    word: str
+    count: int
+
+
+class CsvPreviewStats(BaseModel):
     row_count: int
     column_count: int
     sampled_rows: int
+    null_counts: dict[str, int]
+    unique_counts: dict[str, int]
+    column_types: dict[str, str]
+    word_frequencies: list[WordFrequency]
 
 
-class CsvSummaryResponse(BaseModel):
-    summary: str
-    sentiment: str = Field(pattern="^(positive|neutral|negative|mixed)$")
-    key_themes: list[str]
-    common_issues: list[str]
-    recommendations: list[str]
-    stats: CsvSummaryStats
+class CsvPreviewResponse(BaseModel):
+    columns: list[str]
+    rows: list[dict[str, object]]
+    stats: CsvPreviewStats
 
 
-class CsvSummaryApiResponse(CsvSummaryResponse):
+class CsvPreviewApiResponse(CsvPreviewResponse):
     csv_id: str
-
-
-CSV_SUMMARY_JSON_SCHEMA: dict[str, object] = {
-    "name": "csv_review_summary",
-    "strict": True,
-    "schema": {
-        "type": "object",
-        "additionalProperties": False,
-        "required": [
-            "summary",
-            "sentiment",
-            "key_themes",
-            "common_issues",
-            "recommendations",
-            "stats",
-        ],
-        "properties": {
-            "summary": {"type": "string"},
-            "sentiment": {
-                "type": "string",
-                "enum": ["positive", "neutral", "negative", "mixed"],
-            },
-            "key_themes": {"type": "array", "items": {"type": "string"}},
-            "common_issues": {"type": "array", "items": {"type": "string"}},
-            "recommendations": {"type": "array", "items": {"type": "string"}},
-            "stats": {
-                "type": "object",
-                "additionalProperties": False,
-                "required": ["row_count", "column_count", "sampled_rows"],
-                "properties": {
-                    "row_count": {"type": "integer"},
-                    "column_count": {"type": "integer"},
-                    "sampled_rows": {"type": "integer"},
-                },
-            },
-        },
-    },
-}

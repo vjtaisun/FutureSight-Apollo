@@ -1,68 +1,51 @@
-import json
-import time
-from pathlib import Path
 from uuid import uuid4
 
 from app.core.exceptions import AppError
-from app.core.settings import get_settings
+from app.services.openai_client import OpenAIClient, get_openai_client
 
 
 class CsvStoreService:
-    def __init__(self, base_dir: Path | None = None, max_items: int = 10) -> None:
-        if base_dir is None:
-            settings = get_settings()
-            base_dir = Path(settings.csv_store_dir)
-        self.base_dir = base_dir
-        self.base_dir.mkdir(parents=True, exist_ok=True)
-        self.index_path = self.base_dir / "index.json"
-        self.max_items = max_items
+    def __init__(
+        self,
+        client: OpenAIClient | None = None,
+    ) -> None:
+        self.client = client or get_openai_client()
 
-    def _load_index(self) -> list[dict[str, object]]:
-        if not self.index_path.exists():
-            return []
+    async def save_csv(self, raw_bytes: bytes) -> str:
         try:
-            data = json.loads(self.index_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            return []
-        if not isinstance(data, list):
-            return []
-        return data
+            filename = f"{uuid4().hex}.csv"
+            openai_file = await self.client.files_create_bytes(raw_bytes, filename)
+            vector_store = await self.client.vector_store_create(
+                name=f"csv-{filename.removesuffix('.csv')}",
+                file_ids=[str(getattr(openai_file, "id", ""))],
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise AppError(f"Vector store creation failed: {exc}", status_code=502) from exc
 
-    def _save_index(self, items: list[dict[str, object]]) -> None:
-        self.index_path.write_text(json.dumps(items, indent=2), encoding="utf-8")
+        vector_store_id = getattr(vector_store, "id", None)
+        if not vector_store_id:
+            raise AppError("Vector store id missing from OpenAI response.", status_code=502)
 
-    def _evict_if_needed(self, items: list[dict[str, object]]) -> list[dict[str, object]]:
-        if len(items) <= self.max_items:
-            return items
-        items.sort(key=lambda x: x.get("created_at", 0))
-        while len(items) > self.max_items:
-            oldest = items.pop(0)
-            file_path = self.base_dir / str(oldest.get("filename", ""))
-            if file_path.exists():
-                file_path.unlink()
-        return items
+        return str(vector_store_id)
 
-    def save_csv(self, raw_bytes: bytes) -> str:
-        csv_id = f"csv_{uuid4().hex}"
-        filename = f"{csv_id}.csv"
-        file_path = self.base_dir / filename
-        file_path.write_bytes(raw_bytes)
+    async def get_csv(self, csv_id: str) -> bytes:
+        try:
+            files_page = await self.client.vector_store_files_list(csv_id)
+        except Exception as exc:  # noqa: BLE001
+            raise AppError(f"Vector store lookup failed: {exc}", status_code=502) from exc
 
-        items = self._load_index()
-        items.append({"id": csv_id, "filename": filename, "created_at": int(time.time())})
-        items = self._evict_if_needed(items)
-        self._save_index(items)
-        return csv_id
+        data = getattr(files_page, "data", None)
+        if not data:
+            raise AppError("No files found in vector store.", status_code=404)
 
-    def get_csv(self, csv_id: str) -> bytes:
-        items = self._load_index()
-        match = next((item for item in items if item.get("id") == csv_id), None)
-        if not match:
-            raise AppError("CSV id not found.", status_code=404)
-        file_path = self.base_dir / str(match.get("filename"))
-        if not file_path.exists():
-            raise AppError("CSV file missing on disk.", status_code=404)
-        return file_path.read_bytes()
+        file_id = getattr(data[0], "id", None)
+        if not file_id:
+            raise AppError("Vector store file id missing.", status_code=404)
+
+        try:
+            return await self.client.files_content(str(file_id))
+        except Exception as exc:  # noqa: BLE001
+            raise AppError(f"Failed to download CSV content: {exc}", status_code=502) from exc
 
 
 _csv_store_service: CsvStoreService | None = None

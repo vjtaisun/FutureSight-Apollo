@@ -1,92 +1,55 @@
-import json
+import re
+from collections import Counter
 
 import pandas as pd
 
-from app.core.exceptions import AppError
-from app.prompts.csv_summary_prompt import get_csv_summary_prompts
-from app.schemas.llm import CSV_SUMMARY_JSON_SCHEMA, CsvSummaryResponse
-from app.services.openai_client import OpenAIClient, get_openai_client
+from app.schemas.llm import CsvPreviewResponse, CsvPreviewStats
 
 
 class CsvSummaryService:
-    def __init__(self, client: OpenAIClient | None = None) -> None:
-        self.client = client or get_openai_client()
-        self.default_model = self.client.default_model
+    @staticmethod
+    def _sanitize_rows(df: pd.DataFrame) -> list[dict[str, object]]:
+        sanitized = df.astype(object).where(pd.notnull(df), None)
+        return sanitized.to_dict(orient="records")
 
     @staticmethod
-    def _build_context(df: pd.DataFrame, sample_size: int = 200) -> dict[str, object]:
+    def _word_frequencies(df: pd.DataFrame, max_words: int = 200) -> list[dict[str, object]]:
+        text_cols = df.select_dtypes(include=["object", "string"]).columns
+        if len(text_cols) == 0:
+            return []
+
+        counter: Counter[str] = Counter()
+        rows = df[text_cols].fillna("").astype(str).agg(" ".join, axis=1)
+        for row_text in rows:
+            tokens = re.findall(r"[a-z']+", row_text.lower())
+            counter.update(token for token in tokens if len(token) >= 3)
+
+        return [{"word": word, "count": count} for word, count in counter.most_common(max_words)]
+
+    async def summarize(self, df: pd.DataFrame) -> CsvPreviewResponse:
+        sample_size = 200
         sampled = df.head(sample_size)
-        return {
-            "columns": df.columns.tolist(),
-            "row_count": int(len(df)),
-            "column_count": int(len(df.columns)),
-            "sampled_rows": int(len(sampled)),
-            "rows": sampled.to_dict(orient="records"),
-        }
+        rows = self._sanitize_rows(sampled)
+        null_counts = df.isna().sum().to_dict()
+        unique_counts = df.nunique(dropna=True).to_dict()
+        column_types = {col: str(dtype) for col, dtype in df.dtypes.to_dict().items()}
+        word_frequencies = self._word_frequencies(df)
 
-    async def _call_llm(self, model: str, system_prompt: str, context: str):
-        return await self.client.responses_create(
-            model=model,
-            input=[
-                {
-                    "role": "system",
-                    "content": [{"type": "input_text", "text": system_prompt}],
-                },
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "input_text", "text": context},
-                    ],
-                },
-            ],
-            text={
-                "format": {
-                    "type": "json_schema",
-                    "json_schema": CSV_SUMMARY_JSON_SCHEMA,
-                }
-            },
+        stats = CsvPreviewStats(
+            row_count=int(len(df)),
+            column_count=int(len(df.columns)),
+            sampled_rows=int(len(sampled)),
+            null_counts={str(k): int(v) for k, v in null_counts.items()},
+            unique_counts={str(k): int(v) for k, v in unique_counts.items()},
+            column_types={str(k): str(v) for k, v in column_types.items()},
+            word_frequencies=word_frequencies,
         )
 
-    async def _call_llm_json_object(
-        self, model: str, system_prompt: str, context: str
-    ):
-        return await self.client.responses_create(
-            model=model,
-            input=[
-                {
-                    "role": "system",
-                    "content": [{"type": "input_text", "text": system_prompt}],
-                },
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "input_text", "text": context},
-                    ],
-                },
-            ],
-            text={"format": {"type": "json_object"}},
+        return CsvPreviewResponse(
+            columns=[str(col) for col in df.columns.tolist()],
+            rows=rows,
+            stats=stats,
         )
-
-    async def summarize(self, df: pd.DataFrame) -> CsvSummaryResponse:
-        system_prompt = get_csv_summary_prompts()
-        context = json.dumps(self._build_context(df), ensure_ascii=True)
-        model = self.default_model
-
-        try:
-            response = await self._call_llm(model, system_prompt, context)
-        except Exception:
-            response = await self._call_llm_json_object(model, system_prompt, context)
-
-        output_text = getattr(response, "output_text", None)
-        if not output_text:
-            raise AppError("LLM did not return output text.", status_code=502)
-
-        try:
-            payload = json.loads(output_text)
-        except json.JSONDecodeError as exc:
-            raise AppError("LLM returned invalid JSON.", status_code=502) from exc
-
-        return CsvSummaryResponse(**payload)
 
 
 _csv_summary_service: CsvSummaryService | None = None

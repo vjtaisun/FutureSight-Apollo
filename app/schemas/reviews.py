@@ -31,9 +31,4 @@ class ScrapeSummarizeResponse(BaseModel):
     url: str
     csv_id: str
     scraped_count: int
-    summary: str
-    sentiment: str
-    key_themes: list[str]
-    common_issues: list[str]
-    recommendations: list[str]
-    stats: dict[str, int]
+    preview: dict[str, object]
